@@ -1,144 +1,173 @@
-const mineflayer = require('mineflayer')
+const mineflayer = require("mineflayer");
 
 // ---------------------------
 // Bot configuration
 // ---------------------------
 const config = {
-  host: 'soloblock.falix.app',
+  host: "soloblock.falix.app",
+
   port: 21858,
-  username: 'SoloBlock',
-  password: '',
-  useMovement: true
-}
+  username: "SoloBlock",
+  password: "",
+  useMovement: true,
+};
 
-const RECONNECT_DELAY_MS = 5000
-let reconnectTimer = null
-
-// 🔒 Target position (LOCK POINT)
-const targetPos = { x: 0, y: 100, z: 0 }
+const RECONNECT_DELAY_MS = 5000;
+let reconnectTimer = null;
 
 /**
  * Creates and starts a Mineflayer bot instance.
  */
-function createBot () {
+function createBot() {
   const bot = mineflayer.createBot({
     host: config.host,
     port: config.port,
     username: config.username,
-    auth: 'offline'
-  })
+    auth: "offline", // cracked/offline-mode by default
+  });
 
-  let antiAfkTimeout = null
+  let antiAfkTimeout = null;
 
-  function sendCommandSafely (command, delayMs) {
+  /**
+   * Sends a command with a short delay to reduce command race conditions.
+   */
+  function sendCommandSafely(command, delayMs) {
     setTimeout(() => {
-      if (!bot.player) return
-      bot.chat(command)
-      console.log(`[COMMAND] ${command}`)
-    }, delayMs)
+      if (!bot.player) return;
+      bot.chat(command);
+      console.log(`[COMMAND] ${command}`);
+    }, delayMs);
   }
 
-  // 🔒 POSITION LOCK SYSTEM
-  function lockPosition () {
-    setInterval(() => {
-      if (!bot.entity) return
-
-      const pos = bot.entity.position
-
-      const dx = Math.abs(pos.x - targetPos.x)
-      const dy = Math.abs(pos.y - targetPos.y)
-      const dz = Math.abs(pos.z - targetPos.z)
-
-      if (dx > 2 || dy > 2 || dz > 2) {
-        console.log('[LOCK] Returning to center')
-
-        bot.lookAt(targetPos, true)
-        bot.setControlState('forward', true)
-
-        setTimeout(() => {
-          bot.clearControlStates()
-        }, 800)
-      }
-    }, 2000)
-  }
-
-  function runAntiAfkStep () {
+  /**
+   * Performs one anti-AFK action and schedules the next one.
+   */
+  function runAntiAfkStep() {
     if (!bot.entity) {
-      scheduleNextAntiAfkStep()
-      return
+      scheduleNextAntiAfkStep();
+      return;
     }
 
-    // 👀 Camera movement
-    const yaw = Math.random() * Math.PI * 2
-    const pitch = (Math.random() - 0.5) * Math.PI
-    bot.look(yaw, pitch, true)
+    // Slight camera movement (primary anti-AFK behavior)
+    const currentYaw = bot.entity.yaw;
+    const currentPitch = bot.entity.pitch;
 
-    // 🔥 SAFE MOVEMENT (no forward/back)
-    bot.clearControlStates()
+    // Tiny angle changes to look human-like while staying almost still
+    const yawOffset = (Math.random() - 0.5) * 0.16; // approx +/- 9 degrees
+    const pitchOffset = (Math.random() - 0.5) * 0.08; // approx +/- 4.5 degrees
 
+    const nextYaw = currentYaw + yawOffset;
+    const nextPitch = clamp(currentPitch + pitchOffset, -1.2, 1.2);
+
+    bot.look(nextYaw, nextPitch, true).catch((err) => {
+      console.error("[ANTI-AFK] look() failed:", err.message);
+    });
+
+    // Optional tiny movement pulse (easy to toggle via config.useMovement)
     if (config.useMovement) {
-      const actions = ['left', 'right', 'jump']
-      const action = actions[Math.floor(Math.random() * actions.length)]
+      const actions = ["forward", "back", "left", "right", "jump"];
+      const action = actions[Math.floor(Math.random() * actions.length)];
 
-      console.log(`[MOVE] ${action}`)
+      console.log(`[MOVE] ${action}`);
 
-      if (action === 'jump') {
-        bot.setControlState('jump', true)
-        setTimeout(() => bot.setControlState('jump', false), 500)
+      if (action === "jump") {
+        bot.setControlState("jump", true);
+        setTimeout(() => bot.setControlState("jump", false), 800);
       } else {
-        bot.setControlState(action, true)
-        setTimeout(() => bot.setControlState(action, false), 500)
+        bot.setControlState(action, true);
+
+        // sometimes sprint for realism
+        if (Math.random() < 0.3) {
+          bot.setControlState("sprint", true);
+        }
+
+        setTimeout(
+          () => {
+            bot.setControlState(action, false);
+            bot.setControlState("sprint", false);
+          },
+          randomInt(800, 2000),
+        );
       }
     }
 
-    scheduleNextAntiAfkStep()
+    scheduleNextAntiAfkStep();
   }
 
-  function scheduleNextAntiAfkStep () {
-    const delay = Math.floor(Math.random() * 5000) + 10000
-    antiAfkTimeout = setTimeout(runAntiAfkStep, delay)
+  /**
+   * Schedules the next anti-AFK step every 10-15 seconds.
+   */
+  function scheduleNextAntiAfkStep() {
+    const delay = randomInt(10000, 15000);
+    antiAfkTimeout = setTimeout(runAntiAfkStep, delay);
   }
 
-  function startAntiAfk () {
-    stopAntiAfk()
-    console.log('[ANTI-AFK] Started')
-    scheduleNextAntiAfkStep()
+  /**
+   * Starts anti-AFK loop.
+   */
+  function startAntiAfk() {
+    stopAntiAfk();
+    console.log("[ANTI-AFK] Started");
+    scheduleNextAntiAfkStep();
   }
 
-  function stopAntiAfk () {
+  /**
+   * Stops anti-AFK loop and movement state.
+   */
+  function stopAntiAfk() {
     if (antiAfkTimeout) {
-      clearTimeout(antiAfkTimeout)
-      antiAfkTimeout = null
+      clearTimeout(antiAfkTimeout);
+      antiAfkTimeout = null;
     }
-    bot.clearControlStates()
+    bot.setControlState("forward", false);
   }
 
-  bot.once('spawn', () => {
-    console.log('Bot joined the server')
+  bot.once("spawn", () => {
+    console.log("Bot joined the server");
 
-    if (config.password) {
-      sendCommandSafely(`/login ${config.password}`, 1000)
+    if (config.password && config.password.trim() !== "") {
+      sendCommandSafely(`/login ${config.password}`, 1000);
     }
 
-    sendCommandSafely('/gamemode spectator', 2000)
+    sendCommandSafely("/gamemode spectator", 2000);
+    startAntiAfk();
+  });
 
-    lockPosition() // 🔥 ADD THIS
-    startAntiAfk()
-  })
+  bot.on("kicked", (reason) => {
+    console.log("[KICKED]", reason);
+  });
 
-  bot.on('kicked', (reason) => {
-    console.log('[KICKED]', reason)
-  })
+  bot.on("error", (err) => {
+    console.error("[ERROR]", err.message);
+  });
 
-  bot.on('error', (err) => {
-    console.error('[ERROR]', err.message)
-  })
-
-  bot.on('end', () => {
-    console.log('Disconnected... reconnecting')
-    stopAntiAfk()
-    setTimeout(createBot, RECONNECT_DELAY_MS)
-  })
+  bot.on("end", () => {
+    console.log(
+      `[DISCONNECTED] Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`,
+    );
+    stopAntiAfk();
+    scheduleReconnect();
+  });
 }
 
-createBot()
+/**
+ * Schedules a reconnect attempt after a fixed delay.
+ */
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    createBot();
+  }, RECONNECT_DELAY_MS);
+}
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+createBot();
