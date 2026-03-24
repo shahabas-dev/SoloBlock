@@ -1,185 +1,173 @@
-const mineflayer = require('mineflayer')
+const mineflayer = require("mineflayer");
 
 // ---------------------------
 // Bot configuration
 // ---------------------------
 const config = {
-  host: 'soloblock.falix.app',
+  host: "soloblock.falix.app",
+
   port: 21858,
-  username: 'SoloBlock',
-  password: '',
-  useMovement: true
-}
+  username: "SoloBlock",
+  password: "",
+  useMovement: true,
+};
 
-const RECONNECT_DELAY_MS = 5000
-let reconnectTimer = null
-
-/**
- * Starts anti-AFK behavior and returns a stop handler.
- * Uses a lightweight interval ticker and schedules a new action every 10-20 seconds.
- */
-function startAntiAFK (bot) {
-  let actionInterval = null
-  let movementTimeout = null
-  let isMoving = false
-  let nextActionAt = Date.now() + randomInt(10000, 20000)
-
-  const MOVEMENT_ACTIONS = ['forward', 'back', 'left', 'right', 'jump']
-  const CONTROL_STATES = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
-
-  function resetControls () {
-    for (const state of CONTROL_STATES) {
-      bot.setControlState(state, false)
-    }
-  }
-
-  function rotateCamera () {
-    if (!bot.entity) return
-
-    const currentYaw = bot.entity.yaw
-    const currentPitch = bot.entity.pitch
-
-    // Small smooth offsets to mimic natural head movement.
-    const yawOffset = (Math.random() - 0.5) * 0.24
-    const pitchOffset = (Math.random() - 0.5) * 0.12
-
-    const nextYaw = currentYaw + yawOffset
-    const nextPitch = clamp(currentPitch + pitchOffset, -1.2, 1.2)
-
-    bot.look(nextYaw, nextPitch, false).catch((err) => {
-      console.error('[ANTI-AFK] look() failed:', err.message)
-    })
-  }
-
-  function doMovementAction () {
-    if (!config.useMovement || !bot.entity || isMoving) return
-
-    isMoving = true
-    resetControls()
-
-    const action = MOVEMENT_ACTIONS[randomInt(0, MOVEMENT_ACTIONS.length - 1)]
-    const duration = randomInt(1000, 3000)
-
-    bot.setControlState(action, true)
-    console.log(`[ANTI-AFK] Movement: ${action} (${duration}ms)`)
-
-    movementTimeout = setTimeout(() => {
-      resetControls()
-      isMoving = false
-    }, duration)
-  }
-
-  function runStep () {
-    if (!bot.entity) return
-
-    // Camera movement is occasional to avoid repetitive patterns.
-    if (Math.random() < 0.75) {
-      rotateCamera()
-    }
-
-    doMovementAction()
-  }
-
-  function stop () {
-    if (actionInterval) {
-      clearInterval(actionInterval)
-      actionInterval = null
-    }
-
-    if (movementTimeout) {
-      clearTimeout(movementTimeout)
-      movementTimeout = null
-    }
-
-    isMoving = false
-    resetControls()
-    console.log('[ANTI-AFK] Stopped')
-  }
-
-  actionInterval = setInterval(() => {
-    if (Date.now() < nextActionAt) return
-
-    runStep()
-    nextActionAt = Date.now() + randomInt(10000, 20000)
-  }, 1000)
-
-  console.log('[ANTI-AFK] Started')
-  return { stop }
-}
+const RECONNECT_DELAY_MS = 5000;
+let reconnectTimer = null;
 
 /**
  * Creates and starts a Mineflayer bot instance.
  */
-function createBot () {
+function createBot() {
   const bot = mineflayer.createBot({
     host: config.host,
     port: config.port,
     username: config.username,
-    auth: 'offline' // cracked/offline-mode by default
-  })
+    auth: "offline", // cracked/offline-mode by default
+  });
 
-  let antiAfkController = null
+  let antiAfkTimeout = null;
 
   /**
    * Sends a command with a short delay to reduce command race conditions.
    */
-  function sendCommandSafely (command, delayMs) {
+  function sendCommandSafely(command, delayMs) {
     setTimeout(() => {
-      if (!bot.player) return
-      bot.chat(command)
-      console.log(`[COMMAND] ${command}`)
-    }, delayMs)
+      if (!bot.player) return;
+      bot.chat(command);
+      console.log(`[COMMAND] ${command}`);
+    }, delayMs);
   }
 
-  bot.once('spawn', () => {
-    console.log('Bot joined the server')
-
-    if (config.password && config.password.trim() !== '') {
-      sendCommandSafely(`/login ${config.password}`, 1000)
+  /**
+   * Performs one anti-AFK action and schedules the next one.
+   */
+  function runAntiAfkStep() {
+    if (!bot.entity) {
+      scheduleNextAntiAfkStep();
+      return;
     }
 
-    sendCommandSafely('/gamemode spectator', 2000)
-    antiAfkController = startAntiAFK(bot)
-  })
+    // Slight camera movement (primary anti-AFK behavior)
+    const currentYaw = bot.entity.yaw;
+    const currentPitch = bot.entity.pitch;
 
-  bot.on('kicked', (reason) => {
-    console.log('[KICKED]', reason)
-  })
+    // Tiny angle changes to look human-like while staying almost still
+    const yawOffset = (Math.random() - 0.5) * 0.16; // approx +/- 9 degrees
+    const pitchOffset = (Math.random() - 0.5) * 0.08; // approx +/- 4.5 degrees
 
-  bot.on('error', (err) => {
-    console.error('[ERROR]', err.message)
-  })
+    const nextYaw = currentYaw + yawOffset;
+    const nextPitch = clamp(currentPitch + pitchOffset, -1.2, 1.2);
 
-  bot.on('end', () => {
-    console.log(`[DISCONNECTED] Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`)
+    bot.look(nextYaw, nextPitch, true).catch((err) => {
+      console.error("[ANTI-AFK] look() failed:", err.message);
+    });
 
-    if (antiAfkController) {
-      antiAfkController.stop()
-      antiAfkController = null
+    // Optional tiny movement pulse (easy to toggle via config.useMovement)
+    if (config.useMovement) {
+      const actions = ["forward", "back", "left", "right", "jump"];
+      const action = actions[Math.floor(Math.random() * actions.length)];
+
+      console.log(`[MOVE] ${action}`);
+
+      if (action === "jump") {
+        bot.setControlState("jump", true);
+        setTimeout(() => bot.setControlState("jump", false), 800);
+      } else {
+        bot.setControlState(action, true);
+
+        // sometimes sprint for realism
+        if (Math.random() < 0.3) {
+          bot.setControlState("sprint", true);
+        }
+
+        setTimeout(
+          () => {
+            bot.setControlState(action, false);
+            bot.setControlState("sprint", false);
+          },
+          randomInt(800, 2000),
+        );
+      }
     }
 
-    scheduleReconnect()
-  })
+    scheduleNextAntiAfkStep();
+  }
+
+  /**
+   * Schedules the next anti-AFK step every 10-15 seconds.
+   */
+  function scheduleNextAntiAfkStep() {
+    const delay = randomInt(10000, 15000);
+    antiAfkTimeout = setTimeout(runAntiAfkStep, delay);
+  }
+
+  /**
+   * Starts anti-AFK loop.
+   */
+  function startAntiAfk() {
+    stopAntiAfk();
+    console.log("[ANTI-AFK] Started");
+    scheduleNextAntiAfkStep();
+  }
+
+  /**
+   * Stops anti-AFK loop and movement state.
+   */
+  function stopAntiAfk() {
+    if (antiAfkTimeout) {
+      clearTimeout(antiAfkTimeout);
+      antiAfkTimeout = null;
+    }
+    bot.setControlState("forward", false);
+  }
+
+  bot.once("spawn", () => {
+    console.log("Bot joined the server");
+
+    if (config.password && config.password.trim() !== "") {
+      sendCommandSafely(`/login ${config.password}`, 1000);
+    }
+
+    sendCommandSafely("/gamemode spectator", 2000);
+    startAntiAfk();
+  });
+
+  bot.on("kicked", (reason) => {
+    console.log("[KICKED]", reason);
+  });
+
+  bot.on("error", (err) => {
+    console.error("[ERROR]", err.message);
+  });
+
+  bot.on("end", () => {
+    console.log(
+      `[DISCONNECTED] Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`,
+    );
+    stopAntiAfk();
+    scheduleReconnect();
+  });
 }
 
 /**
  * Schedules a reconnect attempt after a fixed delay.
  */
-function scheduleReconnect () {
-  if (reconnectTimer) return
+function scheduleReconnect() {
+  if (reconnectTimer) return;
 
   reconnectTimer = setTimeout(() => {
-    reconnectTimer = null
-    createBot()
-  }, RECONNECT_DELAY_MS)
+    reconnectTimer = null;
+    createBot();
+  }, RECONNECT_DELAY_MS);
 }
 
-function randomInt (min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function clamp (value, min, max) {
-  return Math.max(min, Math.min(max, value))
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-createBot()
+createBot();
