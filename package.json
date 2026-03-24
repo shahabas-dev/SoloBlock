@@ -1,0 +1,20 @@
+{
+  "name": "mineflayer-spectator-bot",
+  "version": "1.0.0",
+  "description": "24/7 Mineflayer spectator bot with anti-AFK camera movement and auto-reconnect",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "minecraft",
+    "mineflayer",
+    "bot",
+    "afk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "mineflayer": "^4.23.0"
+  }
+}
